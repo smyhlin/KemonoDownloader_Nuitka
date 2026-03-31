@@ -73,3 +73,6 @@ logs/
 
 # debug
 debug_*.py
+
+# database
+*.db*

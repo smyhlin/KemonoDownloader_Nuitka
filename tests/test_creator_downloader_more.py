@@ -8,6 +8,178 @@ from types import SimpleNamespace
 from kemonodownloader import creator_downloader as cd
 
 
+class DummySignal:
+    def __init__(self):
+        self.emitted = False
+        self.last_args = None
+
+    def emit(self, *args):
+        self.emitted = True
+        self.last_args = args
+
+
+def test_validation_thread_invalid_url():
+    class DummySettings:
+        api_request_max_retries = 1
+        settings_tab = None
+
+    t = cd.ValidationThread("https://kemono.cr/bad/link", DummySettings())
+    t.log = DummySignal()
+    t.result = DummySignal()
+    t.run()
+    assert t.result.emitted is True
+    assert t.result.last_args == (False,)
+
+
+def test_validation_thread_success(monkeypatch):
+    class DummySettings:
+        api_request_max_retries = 1
+        settings_tab = None
+
+    class FakeResp:
+        status_code = 200
+
+        def __init__(self):
+            self.text = "Welcome to kemono site"
+
+    class FakeSession:
+        def get(self, url, headers=None, timeout=None):
+            return FakeResp()
+
+    monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FakeSession())
+
+    t = cd.ValidationThread("https://kemono.cr/user/abc", DummySettings())
+    t.log = DummySignal()
+    t.result = DummySignal()
+    t.run()
+    assert t.result.emitted is True
+    assert t.result.last_args == (True,)
+
+
+def test_get_desc_folder_for_post_strategies(tmp_path):
+    class DummySettingsTab:
+        def __init__(self, strat):
+            self._s = strat
+
+        def get_creator_folder_strategy(self):
+            return self._s
+
+    class DummySettings:
+        def __init__(self, st):
+            self.settings_tab = st
+
+    service = "fanbox"
+    creator_id = "123"
+    download_folder = str(tmp_path / "dl")
+    selected_posts = ["1"]
+    files_to_download = []
+    files_to_posts_map = {}
+    console = None
+    other_files_dir = str(tmp_path / "other")
+    post_titles_map = {}
+
+    # by_file_type -> should return 'txt' subfolder
+    s_tab = DummySettingsTab("by_file_type")
+    thread = cd.CreatorDownloadThread(
+        service,
+        creator_id,
+        download_folder,
+        selected_posts,
+        files_to_download,
+        files_to_posts_map,
+        console,
+        other_files_dir,
+        post_titles_map,
+        auto_rename_enabled=False,
+        settings=DummySettings(s_tab),
+        max_concurrent=1,
+    )
+    creator_folder = os.path.normpath(str(tmp_path / "creator"))
+    res = thread.get_desc_folder_for_post(creator_folder, "1", "Title")
+    assert res.endswith(os.path.join("creator", "txt")) or res.endswith("txt")
+
+    # single_folder -> return creator_folder
+    s_tab2 = DummySettingsTab("single_folder")
+    thread2 = cd.CreatorDownloadThread(
+        service,
+        creator_id,
+        download_folder,
+        selected_posts,
+        files_to_download,
+        files_to_posts_map,
+        console,
+        other_files_dir,
+        post_titles_map,
+        auto_rename_enabled=False,
+        settings=DummySettings(s_tab2),
+        max_concurrent=1,
+    )
+    res2 = thread2.get_desc_folder_for_post(creator_folder, "1", "Title")
+    assert res2 == creator_folder
+
+
+def test_check_post_completion_emits_post_completed():
+    class DummySettings:
+        file_download_max_retries = 1
+        settings_tab = None
+
+    file_url = "file://one"
+    thread = cd.CreatorDownloadThread(
+        service="fanbox",
+        creator_id="123",
+        download_folder=str(os.getcwd()),
+        selected_posts=["1"],
+        files_to_download=[file_url],
+        files_to_posts_map={file_url: "1"},
+        console=None,
+        other_files_dir=str(os.getcwd()),
+        post_titles_map={},
+        auto_rename_enabled=False,
+        settings=DummySettings(),
+        max_concurrent=1,
+    )
+    thread.post_files_map = {"1": [file_url]}
+    thread.completed_files = {file_url}
+    sig = DummySignal()
+    thread.post_completed = sig
+    thread.check_post_completion(file_url)
+    assert sig.emitted is True
+    assert sig.last_args == ("1",)
+
+
+def test_download_post_text_if_needed_calls_once(tmp_path):
+    class DummySettings:
+        file_download_max_retries = 1
+        settings_tab = None
+
+    thread = cd.CreatorDownloadThread(
+        service="fanbox",
+        creator_id="123",
+        download_folder=str(tmp_path / "dl"),
+        selected_posts=["1"],
+        files_to_download=[],
+        files_to_posts_map={},
+        console=None,
+        other_files_dir=str(tmp_path / "other"),
+        post_titles_map={},
+        auto_rename_enabled=False,
+        settings=DummySettings(),
+        max_concurrent=1,
+    )
+
+    calls = []
+
+    def fake_download_sync(pid, folder):
+        calls.append((pid, folder))
+
+    thread._download_text_sync = fake_download_sync
+
+    asyncio.run(thread.download_post_text_if_needed("1", str(tmp_path)))
+    # second call should not invoke _download_text_sync again
+    asyncio.run(thread.download_post_text_if_needed("1", str(tmp_path)))
+    assert len(calls) == 1
+
+
 def test_get_headers_and_session_proxy_behavior(monkeypatch):
     # Reset cached headers and user agent
     monkeypatch.setattr(cd, "HEADERS", None)
