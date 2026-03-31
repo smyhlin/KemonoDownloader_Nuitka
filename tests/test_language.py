@@ -334,3 +334,56 @@ class TestLanguageManagerSingleton:
             assert result == "キューに追加されました"
         finally:
             language_manager.set_language(original)
+
+
+class TestKDLanguageEdgeCases:
+    """Test edge cases and error handling in KDLanguage."""
+
+    def setup_method(self):
+        """Store original language before each test."""
+        self.original = language_manager.current_language
+        language_manager.set_language("english")
+
+    def teardown_method(self):
+        """Restore original language after each test."""
+        language_manager.set_language(self.original)
+
+    def test_get_text_fallback_to_english(self):
+        """Test fallback to English when a language is missing for a key."""
+        # Use a key that we know exists (e.g. 'added_to_queue')
+        # We need to manually inject a missing language for this test to be reliable
+        # or use a language that is not in the translations for that key.
+        # But all common keys have all 4 languages.
+        # Let's mock a entry.
+        original_translations = language_manager.translations.copy()
+        try:
+            language_manager.translations["test_fallback"] = {
+                "english": "Fallback success"
+            }
+            language_manager.set_language("japanese")
+            # Japanese is missing for 'test_fallback', should return English
+            assert language_manager.get_text("test_fallback") == "Fallback success"
+        finally:
+            language_manager.translations = original_translations
+
+    def test_get_text_format_error(self):
+        """Test handling of formatting errors (e.g. too few arguments)."""
+        # Create a new instance to ensure coverage is tracked for this instance
+        manager = KDLanguage()
+        # Mock a translation with a named placeholder to trigger KeyError
+        manager.translations["test_error"] = {"english": "{missing_key}"}
+        # Providing only positional arguments will cause a KeyError for {missing_key}
+        result = manager.get_text("test_error", "english", "some_value")
+        assert result == "{missing_key}"
+
+    def test_set_language_invalid(self):
+        """Test set_language with an invalid language code."""
+        assert language_manager.set_language("invalid-lang") is False
+
+    def test_get_language_name_basic(self):
+        """Test get_language_name method."""
+        # Current language is 'english' (from setup_method)
+        # get_language_name() calls get_text('english')
+        # Which should return 'English'
+        assert language_manager.get_language_name() == "English"
+        assert language_manager.get_language_name("japanese") == "Japanese"

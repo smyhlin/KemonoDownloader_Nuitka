@@ -321,3 +321,45 @@ class TestHashDBSchemaMigration:
         db.store("new_key", "/new.jpg", "newhash", "https://new.url", 999)
         entry2 = db.lookup("new_key")
         assert entry2["file_size"] == 999
+
+
+class TestHashDBEdgeCases:
+    """Test edge cases and error handling in HashDB."""
+
+    def test_migrate_invalid_data(self, isolated_hash_dir):
+        """Test migration with invalid JSON data (not a dict or empty)."""
+        os.makedirs(isolated_hash_dir, exist_ok=True)
+        json_path = os.path.join(isolated_hash_dir, "file_hashes.json")
+
+        # Not a dict
+        with open(json_path, "w") as f:
+            json.dump(["not", "a", "dict"], f)
+        db = HashDB(isolated_hash_dir)
+        assert db.count() == 0
+
+        # Empty dict
+        with open(json_path, "w") as f:
+            json.dump({}, f)
+        db = HashDB(isolated_hash_dir)
+        assert db.count() == 0
+
+    def test_migrate_rename_error(self, isolated_hash_dir, monkeypatch):
+        """Test migration when os.rename fails."""
+        os.makedirs(isolated_hash_dir, exist_ok=True)
+        legacy_data = {"key": {"file_path": "/p", "file_hash": "h", "url": "u"}}
+        json_path = os.path.join(isolated_hash_dir, "file_hashes.json")
+        with open(json_path, "w") as f:
+            json.dump(legacy_data, f)
+
+        import os as real_os
+
+        def mock_rename(src, dst):
+            raise OSError("Mock rename error")
+
+        monkeypatch.setattr(real_os, "rename", mock_rename)
+
+        # Should not raise exception
+        db = HashDB(isolated_hash_dir)
+        assert db.count() == 1
+        # JSON file remains due to rename error
+        assert os.path.exists(json_path)

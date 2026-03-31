@@ -583,7 +583,7 @@ class PostDetectionThread(QThread):
                             ),
                             "DEBUG",
                         )
-                    except (gzip.BadGzipFile, UnicodeDecodeError) as e:
+                    except (gzip.BadGzipFile, UnicodeDecodeError, EOFError) as e:
                         self.log.emit(
                             translate(
                                 "log_warning",
