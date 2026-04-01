@@ -2040,7 +2040,23 @@ class DownloadTorThread(QThread):
             self.progress.emit(100)
 
             with tarfile.open(tmp_archive, "r:gz") as tar_ref:
-                tar_ref.extractall(self.tor_path)
+                # Safely extract files to avoid path traversal vulnerabilities.
+                def _is_within_directory(directory, target):
+                    abs_directory = os.path.abspath(directory)
+                    abs_target = os.path.abspath(target)
+                    try:
+                        return os.path.commonpath(
+                            [abs_directory]
+                        ) == os.path.commonpath([abs_directory, abs_target])
+                    except Exception:
+                        return False
+
+                for member in tar_ref.getmembers():
+                    member_path = os.path.join(self.tor_path, member.name)
+                    if not _is_within_directory(self.tor_path, member_path):
+                        # Skip unsafe member
+                        continue
+                    tar_ref.extract(member, self.tor_path)
 
             # Clean up
             os.unlink(tmp_archive)
