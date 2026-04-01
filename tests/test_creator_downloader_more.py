@@ -315,6 +315,29 @@ def test_fetch_and_detect_files_respects_response(monkeypatch):
     assert any("x.jpg" in u for _, u in files)
 
 
+def test_fetch_and_detect_files_handles_rate_limit(monkeypatch):
+    # Simulate repeated 429 responses and ensure we return None after retries
+    class Fake429:
+        status_code = 429
+
+    class Sess:
+        def get(self, *a, **k):
+            return Fake429()
+
+    # Use small max attempts to keep test fast
+    settings = SimpleNamespace(post_data_max_retries=2, settings_tab=None)
+    t = cd.FilePreparationThread(
+        [], {}, {}, True, True, True, settings, max_concurrent=1
+    )
+
+    monkeypatch.setattr(cd, "get_session", lambda *a, **k: Sess())
+    # Patch time.sleep so retries don't actually delay the test
+    monkeypatch.setattr(cd.time, "sleep", lambda s: None)
+
+    res = t.fetch_and_detect_files("9", "https://kemono.cr/user/99")
+    assert res is None
+
+
 def test_download_file_short_circuit_with_hash(tmp_path):
     service = "kemono"
     creator_id = "8"
