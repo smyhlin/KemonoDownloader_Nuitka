@@ -1,7 +1,59 @@
 import importlib
+import os
 from types import SimpleNamespace
 
 from kemonodownloader import kd_settings as ks
+from kemonodownloader.kd_settings import SettingsTab
+
+
+def test_auto_detect_tor_prefers_app_local(tmp_path, monkeypatch, qapp):
+    parent = SimpleNamespace(download_folder=str(tmp_path / "downloads"))
+    st = SettingsTab(parent)
+
+    # Use the temp base directory so candidate_roots includes it
+    st.temp_settings["base_directory"] = str(tmp_path)
+    st.temp_settings["base_folder_name"] = "AppBase"
+
+    # Create a fake tor executable under the base dir
+    tor_dir = tmp_path / "Tor" / "TorBrowser" / "Tor"
+    os.makedirs(tor_dir, exist_ok=True)
+    tor_path = tor_dir / "tor"
+    tor_path.write_text("#!/bin/sh\necho Tor")
+    os.chmod(tor_path, 0o755)
+
+    # Monkeypatch subprocess.run to claim the binary is Tor
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout="Tor version XYZ"),
+    )
+
+    found = st.auto_detect_tor()
+    assert found is not None
+    assert os.path.basename(found) == "tor"
+
+
+def test_show_template_help_and_browse_directory(monkeypatch, tmp_path, qapp):
+    st = SettingsTab(SimpleNamespace())
+
+    called = {}
+
+    # Monkeypatch QMessageBox.information
+    monkeypatch.setattr(
+        "kemonodownloader.kd_settings.QMessageBox.information",
+        lambda *a, **k: called.setdefault("info", True),
+    )
+
+    st.show_template_help()
+    assert called.get("info")
+
+    # Monkeypatch QFileDialog.getExistingDirectory
+    monkeypatch.setattr(
+        "kemonodownloader.kd_settings.QFileDialog.getExistingDirectory",
+        lambda *a, **k: str(tmp_path / "chosen"),
+    )
+
+    st.browse_directory()
+    assert st.temp_settings["base_directory"].endswith("chosen")
 
 
 def make_tab(tmp_path):
