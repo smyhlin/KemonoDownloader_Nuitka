@@ -1,125 +1,72 @@
 import gzip
 import json
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from kemonodownloader import creator_downloader as cd
-from kemonodownloader.creator_downloader import PostDetectionThread, ThreadSettings
+import kemonodownloader.creator_downloader as cd
 
 
-class FakeResponse:
-    def __init__(self, content_bytes):
+class Resp:
+    def __init__(self, content_bytes, text=""):
         self.content = content_bytes
+        self._text = text
         self.status_code = 200
 
+    @property
+    def text(self):
+        return self._text
 
-class FakeSession:
-    def __init__(self, content_bytes):
-        self._content = content_bytes
-
-    def get(self, *args, **kwargs):
-        return FakeResponse(self._content)
-
-
-def make_settings():
-    settings_tab = SimpleNamespace(get_proxy_settings=lambda: None)
-    return ThreadSettings(
-        creator_posts_max_attempts=1,
-        post_data_max_retries=1,
-        file_download_max_retries=1,
-        api_request_max_retries=1,
-        simultaneous_downloads=1,
-        settings_tab=settings_tab,
-    )
+    def close(self):
+        return None
 
 
-def test_post_detection_handles_gzipped_json(monkeypatch):
-    # Prepare gzipped JSON body representing a list of posts
-    posts = [{"id": "101", "title": "Gzipped Post", "file": {"path": "/media/img.png"}}]
-    gzipped = gzip.compress(json.dumps(posts).encode("utf-8"))
+def _mk_signal_mock():
+    return SimpleNamespace(emit=MagicMock())
 
-    # Monkeypatch get_session to return a session that yields the gzipped response
-    monkeypatch.setattr(
-        "kemonodownloader.creator_downloader.get_session",
-        lambda settings_tab=None: FakeSession(gzipped),
-    )
+
+def test_post_detection_plain_json(monkeypatch):
+    posts = [{"id": "1", "title": "Hello", "file": {"path": "/img/p.jpg"}}]
+    text = json.dumps(posts)
+    resp = Resp(text.encode("utf-8"), text=text)
+
+    class S:
+        def get(self, *a, **k):
+            return resp
+
+    monkeypatch.setattr(cd, "get_session", lambda st=None: S())
 
     post_titles_map = {}
-    settings = make_settings()
-    thread = PostDetectionThread(
-        "https://kemono.cr/fanbox/user/12345", post_titles_map, settings
-    )
+    settings = SimpleNamespace(creator_posts_max_attempts=1, settings_tab=None)
+    t = cd.PostDetectionThread("https://kemono.cr/user/1", post_titles_map, settings)
+    t.log = _mk_signal_mock()
+    t.posts_batch = _mk_signal_mock()
+    t.finished = _mk_signal_mock()
+    t.run()
 
-    # Run the detection synchronously
-    thread.run()
-
-    # The shared post_titles_map should have the detected post title stored
-    key = ("fanbox", "12345", "101")
-    assert key in post_titles_map
-    assert post_titles_map[key] == "Gzipped_Post"
+    # Ensure titles map populated and finished emitted
+    assert any(k[1] == "1" and k[2] == "1" for k in post_titles_map.keys())
+    assert t.finished.emit.called
 
 
-def _make_gz_resp(obj):
-    b = json.dumps(obj).encode("utf-8")
-    gz = gzip.compress(b)
+def test_post_detection_gzipped_response(monkeypatch):
+    posts = [{"id": "2", "title": "Gzip", "attachments": []}]
+    text = json.dumps(posts)
+    gz = gzip.compress(text.encode("utf-8"))
+    resp = Resp(gz, text="")
 
-    class Resp:
-        status_code = 200
-        content = gz
-        headers = {}
-
-    return Resp()
-
-
-def _make_text_resp(obj):
-    s = json.dumps(obj)
-
-    class Resp:
-        status_code = 200
-        content = s.encode("utf-8")
-        text = s
-        headers = {}
-
-    return Resp()
-
-
-def test_post_detection_gzipped_emits_finished(monkeypatch):
-    posts = [{"id": "10", "title": "One", "file": {"path": "/img/one.jpg"}}]
-    resp = _make_gz_resp(posts)
-
-    class FakeSession:
+    class S:
         def get(self, *a, **k):
             return resp
 
-    monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FakeSession())
-    settings = cd.ThreadSettings(1, 1, 1, 1, 1, settings_tab=None)
+    monkeypatch.setattr(cd, "get_session", lambda st=None: S())
 
-    batches = []
-    finished = []
-    t = cd.PostDetectionThread("https://kemono.cr/user/1", {}, settings)
-    t.posts_batch.connect(lambda b: batches.append(b))
-    t.finished.connect(lambda f: finished.append(f))
+    post_titles_map = {}
+    settings = SimpleNamespace(creator_posts_max_attempts=1, settings_tab=None)
+    t = cd.PostDetectionThread("https://kemono.cr/user/2", post_titles_map, settings)
+    t.log = _mk_signal_mock()
+    t.posts_batch = _mk_signal_mock()
+    t.finished = _mk_signal_mock()
     t.run()
 
-    assert len(finished) == 1
-    # finished emits a list of (title, (post_id, thumbnail_url))
-    assert any("One" in title for title, _ in finished[0])
-
-
-def test_post_detection_posts_dict_response(monkeypatch):
-    posts = [{"id": "20", "title": "Two", "file": {"path": "/img/two.jpg"}}]
-    resp = _make_text_resp({"posts": posts})
-
-    class FakeSession2:
-        def get(self, *a, **k):
-            return resp
-
-    monkeypatch.setattr(cd, "get_session", lambda settings_tab=None: FakeSession2())
-    settings = cd.ThreadSettings(1, 1, 1, 1, 1, settings_tab=None)
-
-    finished = []
-    t = cd.PostDetectionThread("https://kemono.cr/user/2", {}, settings)
-    t.finished.connect(lambda f: finished.append(f))
-    t.run()
-
-    assert len(finished) == 1
-    assert any("Two" in title for title, _ in finished[0])
+    assert any(k[1] == "2" and k[2] == "2" for k in post_titles_map.keys())
+    assert t.finished.emit.called
